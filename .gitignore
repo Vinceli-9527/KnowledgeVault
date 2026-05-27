@@ -1,0 +1,32 @@
+# Environment — secrets & credentials (DO NOT COMMIT)
+.env
+
+# Bytecode
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# ChromaDB persistent data
+chroma_store/
+
+# SQLite database
+*.db
+
+# Generated output
+output/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude Code local state
+.claude/

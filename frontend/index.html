@@ -1,0 +1,689 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>KnowledgeVault — 智能知识库检索与隐私保护分析</title>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+    <script src="https://unpkg.com/marked@12/marked.min.js"></script>
+    <style>
+        :root {
+            --bg: #f0f2f5;
+            --card: #ffffff;
+            --primary: #4f46e5;
+            --primary-light: #eef2ff;
+            --text: #1e293b;
+            --text-muted: #64748b;
+            --border: #e2e8f0;
+            --green: #10b981;
+            --red: #ef4444;
+            --orange: #f59e0b;
+            --radius: 12px;
+            --mono: "Cascadia Code", "Fira Code", "Consolas", monospace;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, "Microsoft YaHei", "PingFang SC", sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, #1e293b, #334155);
+            color: #fff;
+            padding: 20px 0 16px;
+            text-align: center;
+        }
+        .header h1 { font-size: 1.35rem; font-weight: 700; }
+        .header .subtitle { font-size: 0.8rem; opacity: 0.7; margin-top: 2px; }
+        .status-bar {
+            display: flex; gap: 18px; justify-content: center; margin-top: 10px;
+            font-size: 0.73rem;
+        }
+        .status-dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-right: 4px; }
+        .status-dot.ok { background: var(--green); }
+        .status-dot.warn { background: var(--orange); }
+        .status-dot.err { background: var(--red); }
+
+        /* Main container */
+        .container { max-width: 940px; margin: 0 auto; padding: 20px; }
+
+        /* Pipeline flow indicator */
+        .pipeline-flow {
+            display: flex; align-items: center; justify-content: center; gap: 8px;
+            margin-bottom: 20px; font-size: 0.73rem; color: var(--text-muted);
+        }
+        .pipeline-step {
+            background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+            padding: 4px 10px; white-space: nowrap;
+        }
+        .pipeline-step.active { border-color: var(--primary); color: var(--primary); font-weight: 600; }
+        .pipeline-arrow { color: #94a3b8; }
+
+        /* Search */
+        .search-card {
+            background: var(--card); border-radius: var(--radius); padding: 20px 24px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05); margin-bottom: 16px;
+        }
+        .search-row { display: flex; gap: 10px; }
+        .search-input {
+            flex: 1; padding: 11px 16px; border: 2px solid var(--border);
+            border-radius: 8px; font-size: 0.95rem; outline: none; transition: border-color 0.2s;
+        }
+        .search-input:focus { border-color: var(--primary); }
+        .search-btn {
+            padding: 11px 28px; background: var(--primary); color: #fff; border: none;
+            border-radius: 8px; font-size: 0.95rem; font-weight: 600; cursor: pointer;
+            white-space: nowrap; transition: opacity 0.2s;
+        }
+        .search-btn:hover { opacity: 0.9; }
+        .search-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .char-count { font-size: 0.73rem; color: var(--text-muted); margin-top: 6px; }
+        .quick-queries { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+        .quick-chip {
+            padding: 4px 12px; background: var(--primary-light); color: var(--primary);
+            border: 1px solid #c7d2fe; border-radius: 20px; font-size: 0.78rem;
+            cursor: pointer; transition: all 0.15s;
+        }
+        .quick-chip:hover { background: #e0e7ff; }
+
+        /* Loading */
+        .loading-card {
+            background: var(--card); border-radius: var(--radius); padding: 40px;
+            text-align: center; margin-bottom: 16px;
+        }
+        .spinner {
+            width: 32px; height: 32px; border: 3px solid var(--border);
+            border-top-color: var(--primary); border-radius: 50%;
+            animation: spin 0.8s linear infinite; margin: 0 auto 14px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        /* Error */
+        .error-card {
+            background: #fef2f2; border: 1px solid #fecaca; border-radius: var(--radius);
+            padding: 16px 20px; color: var(--red); font-size: 0.88rem; margin-bottom: 16px;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex; gap: 0; border-bottom: 2px solid var(--border); margin-bottom: 16px;
+        }
+        .tab-btn {
+            padding: 10px 20px; border: none; background: none; font-size: 0.88rem;
+            color: var(--text-muted); cursor: pointer; border-bottom: 2px solid transparent;
+            margin-bottom: -2px; transition: all 0.15s; font-weight: 500;
+        }
+        .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+        .tab-btn:hover { color: var(--text); }
+
+        /* Card shared styles */
+        .card {
+            background: var(--card); border-radius: var(--radius);
+            box-shadow: 0 1px 3px rgba(0,0,0,0.05); overflow: hidden; margin-bottom: 16px;
+        }
+        .card-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 12px 20px; background: #f8fafc; border-bottom: 1px solid var(--border);
+            cursor: pointer; user-select: none; font-weight: 600; font-size: 0.88rem;
+        }
+
+        /* Chunks */
+        .chunk-item {
+            padding: 12px 20px; border-bottom: 1px solid var(--border);
+        }
+        .chunk-item:last-child { border-bottom: none; }
+        .chunk-meta { font-size: 0.73rem; color: var(--text-muted); margin-bottom: 4px; display: flex; gap: 14px; }
+        .chunk-meta .score { color: var(--primary); font-weight: 600; }
+        .chunk-text { font-size: 0.84rem; line-height: 1.65; }
+
+        /* Report */
+        .report-body {
+            padding: 24px 28px; font-size: 0.88rem; line-height: 1.8;
+        }
+        .report-body h3 { font-size: 0.95rem; margin: 18px 0 8px; }
+        .report-body h4 { font-size: 0.85rem; margin: 12px 0 6px; }
+        .report-body p { margin-bottom: 10px; }
+        .report-body ul, .report-body ol { margin: 6px 0 10px 20px; }
+        .report-body li { margin-bottom: 3px; }
+        .report-body code { background: #f1f5f9; padding: 1px 5px; border-radius: 3px; font-size: 0.85em; }
+        .report-body blockquote {
+            border-left: 3px solid var(--primary); padding-left: 14px; color: var(--text-muted); margin: 8px 0;
+        }
+        .report-body table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+        .report-body th, .report-body td { border: 1px solid var(--border); padding: 6px 10px; font-size: 0.82rem; }
+        .report-body th { background: #f8fafc; }
+        .gen-badge {
+            display: inline-block; padding: 3px 10px; background: var(--primary-light);
+            color: var(--primary); border-radius: 20px; font-size: 0.73rem; margin-bottom: 12px;
+        }
+
+        /* Prompt Engineering Panel */
+        .prompt-section { margin-bottom: 20px; }
+        .prompt-section h3 {
+            font-size: 0.85rem; font-weight: 600; margin-bottom: 8px;
+            display: flex; align-items: center; gap: 6px;
+        }
+        .prompt-label {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            font-size: 0.7rem; font-weight: 700; text-transform: uppercase;
+        }
+        .prompt-label.system { background: #dbeafe; color: #1e40af; }
+        .prompt-label.user { background: #fef3c7; color: #92400e; }
+        .prompt-box {
+            background: #1e293b; color: #e2e8f0; padding: 16px 20px; border-radius: 8px;
+            font-family: var(--mono); font-size: 0.78rem; line-height: 1.7;
+            white-space: pre-wrap; word-break: break-word; max-height: 360px;
+            overflow-y: auto; position: relative;
+        }
+        .prompt-box .highlight-ctx { background: rgba(79,70,229,0.25); }
+        .prompt-box .highlight-data { background: rgba(16,185,129,0.25); }
+        .prompt-box .highlight-query { background: rgba(245,158,11,0.25); }
+
+        /* Prompt legend */
+        .prompt-legend {
+            display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; font-size: 0.73rem;
+        }
+        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .legend-swatch { width: 14px; height: 14px; border-radius: 3px; }
+        .legend-swatch.ctx { background: rgba(79,70,229,0.3); }
+        .legend-swatch.data { background: rgba(16,185,129,0.3); }
+        .legend-swatch.query { background: rgba(245,158,11,0.3); }
+
+        /* Empty */
+        .empty-state { text-align: center; padding: 60px 20px; color: var(--text-muted); }
+        .empty-state .icon { font-size: 2.5rem; margin-bottom: 10px; }
+
+        /* Knowledge Base */
+        .kb-card { margin-bottom: 16px; }
+        .kb-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 12px 20px; background: #f8fafc; border-bottom: 1px solid var(--border);
+            cursor: pointer; user-select: none;
+        }
+        .kb-header .kb-title {
+            font-weight: 600; font-size: 0.88rem; display: flex; align-items: center; gap: 8px;
+        }
+        .kb-header .kb-chevron { transition: transform 0.2s; font-size: 0.7rem; color: var(--text-muted); }
+        .kb-header .kb-chevron.open { transform: rotate(90deg); }
+        .kb-body { padding: 16px 20px; }
+        .kb-summary { font-size: 0.78rem; color: var(--text-muted); margin-bottom: 14px; display: flex; gap: 16px; }
+        .kb-summary strong { color: var(--text); }
+
+        /* KB: Upload */
+        .kb-upload-zone {
+            border: 2px dashed var(--border); border-radius: 8px; padding: 24px;
+            text-align: center; transition: all 0.2s; margin-bottom: 14px;
+        }
+        .kb-upload-zone.dragover { border-color: var(--primary); background: var(--primary-light); }
+        .kb-upload-zone input[type="file"] { display: none; }
+        .kb-upload-btn {
+            display: inline-block; padding: 8px 20px; background: var(--primary);
+            color: #fff; border-radius: 6px; font-size: 0.84rem; cursor: pointer;
+            font-weight: 500; margin-top: 6px; transition: opacity 0.2s;
+        }
+        .kb-upload-btn:hover { opacity: 0.9; }
+        .kb-upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .kb-upload-hint { font-size: 0.73rem; color: var(--text-muted); margin-top: 4px; }
+        .kb-upload-status {
+            font-size: 0.78rem; margin-top: 8px; padding: 8px 14px; border-radius: 6px;
+        }
+        .kb-upload-status.ok { background: #ecfdf5; color: #065f46; }
+        .kb-upload-status.err { background: #fef2f2; color: var(--red); }
+        .kb-upload-status.info { background: #eff6ff; color: #1e40af; }
+
+        /* KB: Document list */
+        .kb-doc-item {
+            display: flex; align-items: center; gap: 12px; padding: 10px 14px;
+            border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px;
+            font-size: 0.82rem; transition: background 0.15s;
+        }
+        .kb-doc-item:hover { background: #f8fafc; }
+        .kb-doc-item .kb-doc-icon { font-size: 1.2rem; flex-shrink: 0; }
+        .kb-doc-info { flex: 1; min-width: 0; }
+        .kb-doc-info .kb-doc-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .kb-doc-info .kb-doc-meta { font-size: 0.73rem; color: var(--text-muted); margin-top: 2px; }
+        .kb-doc-delete {
+            flex-shrink: 0; padding: 4px 12px; background: none; border: 1px solid #fecaca;
+            color: var(--red); border-radius: 5px; font-size: 0.75rem; cursor: pointer;
+            transition: all 0.15s;
+        }
+        .kb-doc-delete:hover { background: #fef2f2; }
+        .kb-doc-delete:disabled { opacity: 0.4; cursor: not-allowed; }
+
+        /* Privacy notice */
+        .privacy-banner {
+            background: linear-gradient(135deg, #ecfdf5, #f0fdf4); border: 1px solid #a7f3d0;
+            border-radius: var(--radius); padding: 14px 20px; margin-bottom: 16px;
+            font-size: 0.8rem; display: flex; align-items: flex-start; gap: 10px;
+        }
+        .privacy-banner .privacy-icon { font-size: 1.3rem; flex-shrink: 0; margin-top: 1px; }
+        .privacy-banner .privacy-text { flex: 1; line-height: 1.6; }
+        .privacy-banner .privacy-text strong { color: #065f46; }
+        .privacy-badge {
+            display: inline-block; padding: 2px 10px; background: #d1fae5; color: #065f46;
+            border-radius: 12px; font-size: 0.7rem; font-weight: 600;
+        }
+        .pii-count {
+            display: inline-block; padding: 2px 8px; background: #fef3c7; color: #92400e;
+            border-radius: 10px; font-size: 0.72rem; font-weight: 600;
+        }
+    </style>
+</head>
+<body>
+<div id="app">
+    <!-- Header -->
+    <div class="header">
+        <h1>KnowledgeVault — 智能知识库检索与隐私保护分析</h1>
+        <div class="subtitle">DeepSeek Chat + BGE Embedding + ChromaDB | 检索增强生成全链路可视化</div>
+        <div class="status-bar">
+            <span><span class="status-dot" :class="health.ready ? 'ok' : 'err'"></span>管道就绪</span>
+            <span><span class="status-dot" :class="health.api_key_configured ? 'ok' : 'err'"></span>{{ health.api_key_configured ? 'API Key 已配置' : 'API Key 未配置' }}</span>
+            <span><span class="status-dot" :class="health.vector_count > 0 ? 'ok' : 'err'"></span>{{ health.vector_count }} 个向量索引</span>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- Pipeline flow -->
+        <div class="pipeline-flow">
+            <span class="pipeline-step" :class="{ active: stage >= 1 }">1. 输入查询</span>
+            <span class="pipeline-arrow">→</span>
+            <span class="pipeline-step" :class="{ active: stage >= 2 }">2. 向量检索</span>
+            <span class="pipeline-arrow">→</span>
+            <span class="pipeline-step" :class="{ active: stage >= 3 }">3. Prompt 构建</span>
+            <span class="pipeline-arrow">→</span>
+            <span class="pipeline-step" :class="{ active: stage >= 4 }">4. LLM 生成</span>
+            <span class="pipeline-arrow">→</span>
+            <span class="pipeline-step" :class="{ active: stage >= 5 }">5. 报告输出</span>
+        </div>
+
+        <!-- Privacy notice -->
+        <div class="privacy-banner">
+            <span class="privacy-icon">🔒</span>
+            <span class="privacy-text">
+                <strong>隐私保护已启用</strong> — 您的文档保存在本地，检索到的内容在发送至 DeepSeek API 前会自动脱敏。<br>
+                <span style="color:var(--text-muted);">
+                自动隐藏：手机号、身份证号、银行卡号、邮箱、姓名、表格数据。在「Prompt 工程」标签页可查看脱敏后的实际 Prompt。
+                </span>
+            </span>
+        </div>
+
+        <!-- Search -->
+        <div class="search-card">
+            <div class="search-row">
+                <input
+                    class="search-input"
+                    v-model="query"
+                    type="text"
+                    placeholder="输入您的问题，体验 Prompt Engineering 驱动的 RAG 分析..."
+                    @keyup.enter="submitQuery"
+                    :disabled="loading"
+                />
+                <button class="search-btn" @click="submitQuery" :disabled="loading || !query.trim()">
+                    {{ loading ? '处理中...' : '开始分析' }}
+                </button>
+            </div>
+            <div class="char-count">{{ query.length }} 字</div>
+            <div class="quick-queries">
+                <span class="quick-chip" @click="quickQuery('分析深圳创新科技有限公司2024年的财务状况和技术创新进展')">深圳创新科技财务分析</span>
+                <span class="quick-chip" @click="quickQuery('北京数字金融集团面临哪些经营风险？新任CEO刘芳采取了什么改革措施？')">北京数字金融经营风险</span>
+                <span class="quick-chip" @click="quickQuery('上海华信医药收购广州康达生物的并购条款和对赌协议内容')">华信医药并购康达生物</span>
+            </div>
+        </div>
+
+        <!-- Knowledge Base -->
+        <div class="card kb-card">
+            <div class="kb-header" @click="kbOpen = !kbOpen">
+                <span class="kb-title">
+                    <span>📚</span> 知识库管理
+                    <span style="font-weight:400;font-size:0.75rem;color:var(--text-muted);">
+                        {{ kbDocs.length }} 个文档，{{ kbDocs.reduce((s,d) => s + d.chunk_count, 0) }} 个分块
+                    </span>
+                </span>
+                <span class="kb-chevron" :class="{ open: kbOpen }">▶</span>
+            </div>
+            <div class="kb-body" v-show="kbOpen">
+                <!-- Upload zone -->
+                <div class="kb-upload-zone" :class="{ dragover: kbDragOver }"
+                    @dragover.prevent="kbDragOver = true"
+                    @dragleave.prevent="kbDragOver = false"
+                    @drop.prevent="onKbDrop">
+                    <div style="font-size:1.5rem;margin-bottom:4px;">📤</div>
+                    <div style="font-size:0.84rem;font-weight:500;">导入新的知识库文档 (.txt)</div>
+                    <div class="kb-upload-hint">拖拽 .txt 文件到此处，或点击下方按钮选择文件</div>
+                    <label class="kb-upload-btn" :class="{ disabled: kbUploading }" style="display:inline-block;">
+                        {{ kbUploading ? '上传中...' : '选择文件并上传' }}
+                        <input type="file" accept=".txt" multiple
+                            @change="onKbFileSelect" :disabled="kbUploading" />
+                    </label>
+                </div>
+
+                <!-- Upload status -->
+                <div v-if="kbUploadStatus.msg" class="kb-upload-status" :class="kbUploadStatus.type">
+                    {{ kbUploadStatus.msg }}
+                </div>
+
+                <!-- Document list -->
+                <div v-if="kbDocs.length === 0 && !kbUploading" style="text-align:center;padding:20px;color:var(--text-muted);font-size:0.82rem;">
+                    暂无文档，上传 .txt 文件即可添加到知识库
+                </div>
+                <div class="kb-doc-item" v-for="doc in kbDocs" :key="doc.doc_id">
+                    <span class="kb-doc-icon">📄</span>
+                    <div class="kb-doc-info">
+                        <div class="kb-doc-name">{{ doc.filename }}</div>
+                        <div class="kb-doc-meta">
+                            {{ doc.chunk_count }} 分块 · {{ doc.char_count }} 字 · {{ doc.created_at?.split('T')[0] || '-' }}
+                        </div>
+                    </div>
+                    <button class="kb-doc-delete"
+                        @click="deleteKbDoc(doc)"
+                        :disabled="kbDeleting === doc.doc_id">
+                        {{ kbDeleting === doc.doc_id ? '删除中...' : '删除' }}
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading -->
+        <div class="loading-card" v-if="loading">
+            <div class="spinner"></div>
+            <div style="color:var(--text-muted);font-size:0.88rem;">
+                检索相关文档 → 构建 Prompt → LLM 生成分析报告...
+            </div>
+        </div>
+
+        <!-- Error -->
+        <div class="error-card" v-if="error" v-html="error"></div>
+
+        <!-- Results -->
+        <template v-if="result && !loading">
+            <!-- Tabs -->
+            <div class="tabs">
+                <button class="tab-btn" :class="{ active: activeTab === 'report' }" @click="activeTab = 'report'">分析报告</button>
+                <button class="tab-btn" :class="{ active: activeTab === 'prompt' }" @click="activeTab = 'prompt'">Prompt 工程</button>
+                <button class="tab-btn" :class="{ active: activeTab === 'chunks' }" @click="activeTab = 'chunks'">检索结果 ({{ result.retrieved_chunks.length }})</button>
+            </div>
+
+            <!-- Tab: Report -->
+            <div v-show="activeTab === 'report'">
+                <div class="card">
+                    <div class="report-body">
+                        <span class="gen-badge">生成耗时 {{ (result.generation_time_ms / 1000).toFixed(1) }}s</span>
+                        <div v-html="renderedReport"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab: Prompt Engineering -->
+            <div v-show="activeTab === 'prompt'">
+                <div v-if="result.pii_redacted > 0" style="margin-bottom:12px;">
+                    <span class="pii-count">PII 已脱敏 {{ result.pii_redacted }} 处敏感信息</span>
+                </div>
+
+                <div class="prompt-legend">
+                    <span class="legend-item"><span class="legend-swatch ctx"></span> 检索上下文注入</span>
+                    <span class="legend-item"><span class="legend-swatch data"></span> 结构化数据注入</span>
+                    <span class="legend-item"><span class="legend-swatch query"></span> 用户查询</span>
+                </div>
+
+                <div class="prompt-section">
+                    <h3><span class="prompt-label system">System</span> 角色设定 Prompt</h3>
+                    <div class="prompt-box">{{ highlightedSystemPrompt }}</div>
+                </div>
+
+                <div class="prompt-section">
+                    <h3><span class="prompt-label user">User</span> 动态组装 Prompt（含上下文注入）</h3>
+                    <div class="prompt-box" v-html="highlightedUserPrompt"></div>
+                </div>
+            </div>
+
+            <!-- Tab: Chunks -->
+            <div v-show="activeTab === 'chunks'">
+                <div class="card">
+                    <div class="chunk-item" v-for="(chunk, idx) in result.retrieved_chunks" :key="chunk.chunk_id">
+                        <div class="chunk-meta">
+                            <span>片段 #{{ chunk.chunk_id }}</span>
+                            <span class="score">相关度 {{ (1 - chunk.distance).toFixed(3) }}</span>
+                            <span>文档 {{ chunk.document_id }}</span>
+                        </div>
+                        <div class="chunk-text">{{ chunk.text }}</div>
+                    </div>
+                </div>
+            </div>
+        </template>
+
+        <!-- Empty -->
+        <div class="empty-state" v-if="!loading && !result && !error">
+            <div class="icon">&#x1F4DD;</div>
+            <p>输入问题，观察 Prompt Engineering 如何驱动 RAG 管道</p>
+            <p style="font-size:0.8rem;margin-top:4px;">从检索 → Prompt 组装 → 报告生成，全链路可视化</p>
+        </div>
+    </div>
+</div>
+
+<script>
+const { createApp } = Vue;
+
+createApp({
+    data() {
+        return {
+            query: "",
+            loading: false,
+            error: "",
+            result: null,
+            stage: 0,
+            activeTab: "report",
+            health: { ready: false, api_key_configured: false, vector_count: 0 },
+            // Knowledge Base
+            kbOpen: false,
+            kbDocs: [],
+            kbDragOver: false,
+            kbUploading: false,
+            kbDeleting: null,
+            kbUploadStatus: { msg: "", type: "info" },
+        };
+    },
+
+    computed: {
+        renderedReport() {
+            if (!this.result?.report) return "";
+            marked.setOptions({ breaks: true, gfm: true });
+            return marked.parse(this.result.report);
+        },
+
+        highlightedSystemPrompt() {
+            return this.result?.prompt_system || "";
+        },
+
+        highlightedUserPrompt() {
+            const text = this.result?.prompt_user || "";
+            if (!text) return "";
+            // Escape HTML, then highlight semantic sections
+            const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+            // Highlight: 检索到的相关文本片段 section
+            let out = esc(text);
+            out = out.replace(
+                /(## 检索到的相关文本片段[\s\S]*?)(## 结构化数据摘要)/,
+                (_, ctx, data) =>
+                    '<span class="highlight-ctx">' + ctx + '</span>' + data
+            );
+            out = out.replace(
+                /(## 结构化数据摘要[\s\S]*?)(## 用户问题)/,
+                (_, data, q) =>
+                    '<span class="highlight-data">' + data + '</span>' + q
+            );
+            out = out.replace(
+                /(## 用户问题[\s\S]*?)(请按以下结构生成分析报告：[\s\S]*)/,
+                (_, question, template) =>
+                    '<span class="highlight-query">' + question + '</span>' + template
+            );
+
+            return out;
+        },
+    },
+
+    mounted() {
+        this.checkHealth();
+        this.loadKnowledge();
+    },
+
+    methods: {
+        async checkHealth() {
+            try {
+                const res = await fetch("/api/health");
+                this.health = await res.json();
+            } catch(e) {
+                console.error("Health check failed:", e);
+            }
+        },
+
+        // ── Knowledge Base ──────────────────────────────────────────
+
+        async loadKnowledge() {
+            try {
+                const res = await fetch("/api/knowledge");
+                if (!res.ok) throw new Error("HTTP " + res.status);
+                const data = await res.json();
+                this.kbDocs = data.documents || [];
+            } catch(e) {
+                console.error("Knowledge load failed:", e);
+            }
+        },
+
+        clearKbStatus() {
+            this.kbUploadStatus = { msg: "", type: "info" };
+        },
+
+        async doUpload(files) {
+            const txtFiles = [...files].filter(f => f.name.toLowerCase().endsWith(".txt"));
+            if (txtFiles.length === 0) {
+                this.kbUploadStatus = { msg: "请选择 .txt 文件", type: "err" };
+                return;
+            }
+
+            this.kbUploading = true;
+            this.kbUploadStatus = { msg: `正在上传并索引 ${txtFiles.length} 个文件...`, type: "info" };
+
+            try {
+                const form = new FormData();
+                txtFiles.forEach(f => form.append("files", f));
+
+                const res = await fetch("/api/knowledge/upload", {
+                    method: "POST",
+                    body: form,
+                });
+
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || "上传失败 (HTTP " + res.status + ")");
+                }
+
+                const data = await res.json();
+                const up = data.uploaded || [];
+                const sk = data.skipped || [];
+                let msgParts = [];
+                if (up.length > 0) msgParts.push(`成功导入 ${up.length} 个文档`);
+                if (sk.length > 0) msgParts.push(`${sk.length} 个跳过`);
+                this.kbUploadStatus = {
+                    msg: msgParts.join("，") || "上传完成",
+                    type: up.length > 0 ? "ok" : "err",
+                };
+
+                await this.loadKnowledge();
+                await this.checkHealth();
+            } catch(e) {
+                this.kbUploadStatus = { msg: e.message || "上传失败", type: "err" };
+            } finally {
+                this.kbUploading = false;
+            }
+        },
+
+        onKbDrop(e) {
+            this.kbDragOver = false;
+            if (e.dataTransfer?.files?.length) {
+                this.doUpload(e.dataTransfer.files);
+            }
+        },
+
+        onKbFileSelect(e) {
+            if (e.target?.files?.length) {
+                this.doUpload(e.target.files);
+            }
+            e.target.value = "";
+        },
+
+        async deleteKbDoc(doc) {
+            if (!confirm(`确认删除「${doc.filename}」？此操作不可撤销。`)) return;
+
+            this.kbDeleting = doc.doc_id;
+            try {
+                const res = await fetch(`/api/knowledge/${doc.doc_id}`, { method: "DELETE" });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.detail || "删除失败");
+                }
+                await this.loadKnowledge();
+                await this.checkHealth();
+            } catch(e) {
+                alert("删除失败: " + (e.message || "未知错误"));
+            } finally {
+                this.kbDeleting = null;
+            }
+        },
+
+        // ── Query ────────────────────────────────────────────────────
+
+        quickQuery(text) {
+            this.query = text;
+            this.submitQuery();
+        },
+
+        async submitQuery() {
+            const q = this.query.trim();
+            if (!q || this.loading) return;
+
+            this.loading = true;
+            this.error = "";
+            this.result = null;
+            this.stage = 1;
+            this.activeTab = "report";
+
+            try {
+                this.stage = 1;
+                await new Promise(r => setTimeout(r, 150)); // show stage 1
+
+                const res = await fetch("/api/query", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ query: q, top_k: 5 }),
+                });
+
+                this.stage = 2; // Retrieved
+
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    const detail = err.detail || `请求失败 (HTTP ${res.status})`;
+                    if (res.status === 401) throw new Error(`[API Key 未配置] ${detail}`);
+                    throw new Error(detail);
+                }
+
+                this.result = await res.json();
+                this.stage = 4; // LLM done
+                await new Promise(r => setTimeout(r, 100));
+                this.stage = 5; // Complete
+
+            } catch (e) {
+                this.stage = 0;
+                this.error = e.message || "网络错误，请检查服务是否启动";
+            } finally {
+                this.loading = false;
+            }
+        },
+    },
+}).mount("#app");
+</script>
+</body>
+</html>

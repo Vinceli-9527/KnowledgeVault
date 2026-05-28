@@ -1,12 +1,34 @@
-"""Generation prompt templates for DeepSeek API."""
+"""Generation prompt templates for DeepSeek API.
 
-GENERATION_SYSTEM = """你是一位资深金融分析师，擅长基于多源信息撰写结构化的财务分析报告。
-你的报告必须：
-1. 基于提供的上下文信息，不编造数据
-2. 使用中文撰写，专业但不晦涩
-3. 包含明确的数据引用（在括号中注明来源）
-4. 在分析中区分确定事实和推断结论
-5. 使用 Markdown 格式组织内容"""
+Supports dynamic persona selection based on content domain.
+Each domain (finance, politics, technology, healthcare, legal, etc.)
+has its own expert role and report structure.
+"""
+
+from prompts.personas import DomainPersona, DEFAULT_PERSONA
+
+
+def build_system_prompt(persona: DomainPersona) -> str:
+    """Build the system prompt from a domain persona."""
+    rules = [
+        "1. 基于提供的上下文信息，不编造数据",
+        "2. 使用中文撰写，专业但不晦涩",
+        "3. 包含明确的数据引用（在括号中注明来源）",
+        "4. 在分析中区分确定事实和推断结论",
+        "5. 使用 Markdown 格式组织内容",
+    ]
+    return persona.role + "\n\n你的报告必须：\n" + "\n".join(rules)
+
+
+def build_report_template(persona: DomainPersona) -> str:
+    """Build the report structure template from a domain persona's sections."""
+    lines = []
+    for heading, description in persona.report_sections:
+        lines.append(f"### {heading}")
+        lines.append(f"（{description}）")
+        lines.append("")
+    return "\n".join(lines)
+
 
 GENERATION_USER_TEMPLATE = """请根据以下信息回答用户的问题。
 
@@ -19,23 +41,9 @@ GENERATION_USER_TEMPLATE = """请根据以下信息回答用户的问题。
 ## 结构化数据摘要
 {structured_summary}
 
-请按以下结构生成分析报告：
+请按以下结构生成{report_title}：
 
-### 一、执行摘要
-（2-3句话概括核心发现，必须包含具体数据）
-
-### 二、关键财务指标分析
-（营收、利润、增长率等的详细分析，包含数据对比和趋势判断）
-
-### 三、重大事件分析
-（按时间线梳理关键事件，评估每项事件的影响程度）
-
-### 四、风险提示
-（基于文本中提到的风险因素，区分已知风险和潜在风险）
-
-### 五、结论与展望
-（综合判断，未来关注要点）
-
+{report_template}
 请开始生成报告："""
 
 
@@ -43,16 +51,31 @@ def build_generation_messages(
     user_query: str,
     retrieved_contexts: str,
     structured_summary: str,
+    persona: DomainPersona | None = None,
 ) -> list[dict]:
-    """Build the message list for a report generation API call."""
+    """Build the message list for a report generation API call.
+
+    Args:
+        user_query: The user's question
+        retrieved_contexts: Formatted retrieved chunk texts
+        structured_summary: Extracted entity summary
+        persona: Domain persona to use. If None, uses DEFAULT_PERSONA.
+    """
+    if persona is None:
+        persona = DEFAULT_PERSONA
+
+    system_prompt = build_system_prompt(persona)
+    report_template = build_report_template(persona)
+
+    user_content = GENERATION_USER_TEMPLATE.format(
+        user_query=user_query,
+        retrieved_contexts=retrieved_contexts,
+        structured_summary=structured_summary,
+        report_title=persona.report_title,
+        report_template=report_template,
+    )
+
     return [
-        {"role": "system", "content": GENERATION_SYSTEM},
-        {
-            "role": "user",
-            "content": GENERATION_USER_TEMPLATE.format(
-                user_query=user_query,
-                retrieved_contexts=retrieved_contexts,
-                structured_summary=structured_summary,
-            ),
-        },
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
     ]

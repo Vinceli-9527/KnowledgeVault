@@ -45,6 +45,7 @@ from modules.embedder import build_chroma_collection, embed_and_store_chunks, en
 from modules.extractor import run_extraction_pipeline
 from modules.generator import generate_report
 from modules.retriever import retrieve_relevant_chunks
+from modules.url_ingester import ingest_urls
 from utils.helpers import setup_logging
 
 sys.path.insert(0, str(config.BASE_DIR))
@@ -108,6 +109,8 @@ class QueryResponse(BaseModel):
     prompt_system: str = ""
     prompt_user: str = ""
     pii_redacted: int = 0
+    domain: str = "general"
+    persona_role: str = ""
 
 
 class HealthResponse(BaseModel):
@@ -126,6 +129,16 @@ class KnowledgeItem(BaseModel):
     chunk_count: int
     char_count: int
     created_at: str
+
+
+class IngestURLRequest(BaseModel):
+    urls: list[str]
+
+
+class IngestURLResponse(BaseModel):
+    saved: list[dict]
+    failed: list[dict]
+    save_dir: str
 
 
 # ── Lifecycle ─────────────────────────────────────────────────────────
@@ -370,6 +383,8 @@ async def query(req: QueryRequest):
         prompt_system=gen_result["prompt_system"],
         prompt_user=gen_result["prompt_user"],
         pii_redacted=gen_result.get("pii_redacted", 0),
+        domain=gen_result.get("domain", "general"),
+        persona_role=gen_result.get("persona_role", ""),
     )
 
 
@@ -541,6 +556,121 @@ async def delete_knowledge(doc_id: int):
         "deleted_doc_id": doc_id,
         "deleted_filename": filename,
         "removed_chunks": len(chunk_ids),
+        "total_documents": len(state["docs"]),
+        "total_vectors": state["collection"].count(),
+    }
+
+
+# ── URL Ingestion ───────────────────────────────────────────────────────
+
+
+@app.post("/api/knowledge/ingest-url", response_model=IngestURLResponse)
+async def ingest_url(req: IngestURLRequest):
+    """Fetch URLs, extract text, use LLM to refine into KB documents, and save to disk.
+
+    Documents are saved to data/sample_docs/ but NOT auto-indexed.
+    Call /api/knowledge/import-saved to index them into the knowledge base.
+    """
+    if not state["ready"]:
+        raise HTTPException(status_code=503, detail="管道尚未就绪")
+    if not state["api_key_valid"]:
+        raise HTTPException(status_code=401, detail="请先配置 DEEPSEEK_API_KEY")
+    if not req.urls:
+        raise HTTPException(status_code=400, detail="请至少提供一个网址")
+
+    clean_urls = [u.strip() for u in req.urls if u.strip()]
+    if not clean_urls:
+        raise HTTPException(status_code=400, detail="请至少提供一个有效网址")
+
+    try:
+        result = ingest_urls(state["client"], clean_urls, config.SAMPLE_DOCS_DIR)
+    except openai.AuthenticationError:
+        raise HTTPException(status_code=401, detail="DeepSeek API 认证失败")
+    except openai.RateLimitError:
+        raise HTTPException(status_code=429, detail="API 请求频率超限，请稍后再试")
+    except openai.APIError as e:
+        raise HTTPException(status_code=502, detail=f"DeepSeek API 错误: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"网址处理失败: {e}")
+
+    return IngestURLResponse(
+        saved=result["saved"],
+        failed=result["failed"],
+        save_dir=config.SAMPLE_DOCS_DIR,
+    )
+
+
+@app.post("/api/knowledge/import-saved")
+async def import_saved_files():
+    """Scan data/sample_docs/ for .txt files not yet in DB, and index them into ChromaDB."""
+    if not state["ready"]:
+        raise HTTPException(status_code=503, detail="管道尚未就绪")
+
+    existing = set()
+    if state["conn"]:
+        rows = state["conn"].execute("SELECT filename FROM documents").fetchall()
+        existing = {r["filename"] for r in rows}
+
+    import_dir = Path(config.SAMPLE_DOCS_DIR)
+    imported = []
+    skipped = []
+
+    for txt_file in sorted(import_dir.glob("*.txt")):
+        if txt_file.name in existing:
+            skipped.append(txt_file.name)
+            continue
+
+        content = txt_file.read_text(encoding="utf-8").strip()
+        if not content:
+            continue
+
+        lines = content.split("\n", 1)
+        title = lines[0].strip() if lines else txt_file.stem
+        body = lines[1].strip() if len(lines) > 1 else content
+
+        doc_id = insert_document(state["conn"], txt_file.name, title, str(txt_file))
+
+        chunks = chunk_document(
+            doc_id, body,
+            max_chars=config.CHUNK_MAX_CHARS,
+            overlap_chars=config.CHUNK_OVERLAP_CHARS,
+            min_chars=config.CHUNK_MIN_CHARS,
+        )
+        for c in chunks:
+            c.chunk_id = insert_chunk(state["conn"], doc_id, c.chunk_index, c.content)
+        update_document_total_chunks(state["conn"], doc_id, len(chunks))
+
+        if chunks:
+            chunk_ids = [f"chunk_{c.chunk_id}" for c in chunks]
+            chunk_texts = [c.content for c in chunks]
+            chunk_metadatas = [
+                {"document_id": str(doc_id), "chunk_index": c.chunk_index, "chunk_id": str(c.chunk_id)}
+                for c in chunks
+            ]
+            chunk_embeddings = [encode_text(state["embedding_model"], ct) for ct in chunk_texts]
+            state["collection"].add(
+                ids=chunk_ids, embeddings=chunk_embeddings,
+                documents=chunk_texts, metadatas=chunk_metadatas,
+            )
+
+        doc_obj = type("Doc", (), {})()
+        doc_obj._db_id = doc_id
+        doc_obj._chunks = chunks
+        doc_obj.filename = txt_file.name
+        doc_obj.title = title
+        doc_obj.content = body
+        state["docs"].append(doc_obj)
+
+        imported.append({
+            "filename": txt_file.name,
+            "title": title,
+            "doc_id": doc_id,
+            "chunks": len(chunks),
+        })
+
+    return {
+        "imported": imported,
+        "skipped": skipped,
         "total_documents": len(state["docs"]),
         "total_vectors": state["collection"].count(),
     }

@@ -1,12 +1,18 @@
-"""Report generator — LLM-powered analysis report generation."""
+"""Report generator — LLM-powered analysis report generation.
+
+Automatically detects the content domain (finance, politics, technology, etc.)
+and adopts the appropriate expert persona for report generation.
+"""
 
 import json
 import logging
 import time
 import openai
 
-from prompts.generation import build_generation_messages, GENERATION_SYSTEM
+from prompts.generation import build_generation_messages
+from prompts.personas import DomainPersona
 from db.repository import get_extracted_entities_for_chunks
+from modules.domain_classifier import get_persona_for_query
 from modules.privacy import redact_retrieved
 
 logger = logging.getLogger(__name__)
@@ -55,11 +61,17 @@ def generate_report(
 ) -> dict:
     """Generate an analysis report using DeepSeek with RAG context.
 
+    Automatically detects the content domain and adopts an appropriate
+    expert persona (financial analyst, political commentator, tech analyst, etc.).
+
     Returns dict with keys:
         report              — markdown report text
         generation_time_ms  — milliseconds taken
-        prompt_system       — system message content
+        prompt_system       — system message content (with persona)
         prompt_user         — user message content (with injected context)
+        pii_redacted        — number of PII instances redacted
+        domain              — detected domain key
+        persona_role        — expert role used (first line of system prompt)
     """
     chunk_ids = [int(c["metadata"]["chunk_id"]) for c in retrieved_chunks]
     entities = get_extracted_entities_for_chunks(conn, chunk_ids)
@@ -70,12 +82,33 @@ def generate_report(
     from modules.retriever import format_retrieved_context
 
     retrieved_contexts = format_retrieved_context(redacted_chunks)
+
+    # Collect chunk texts for domain classification
+    chunk_texts = [c["document"] for c in retrieved_chunks]
+
+    # Collect entity field names that have values
+    entity_fields = []
+    if entities:
+        for e in entities:
+            for key, val in e.items():
+                if val is not None and val != "" and key not in entity_fields:
+                    entity_fields.append(key)
+
+    # Classify domain and select persona
+    persona = get_persona_for_query(query, chunk_texts, entity_fields)
+
+    logger.info(
+        "Domain classified: %s | Persona: %s...",
+        persona.domain, persona.role[:60],
+    )
+
     structured_summary = build_structured_summary(entities)
 
     messages = build_generation_messages(
         user_query=query,
         retrieved_contexts=retrieved_contexts,
         structured_summary=structured_summary,
+        persona=persona,
     )
 
     start = time.perf_counter()
@@ -88,7 +121,10 @@ def generate_report(
     elapsed_ms = int((time.perf_counter() - start) * 1000)
 
     report = response.choices[0].message.content or ""
-    logger.info("Report generated in %dms, length=%d chars, PII redacted=%d", elapsed_ms, len(report), redaction_count)
+    logger.info(
+        "Report generated in %dms, length=%d chars, PII redacted=%d, domain=%s",
+        elapsed_ms, len(report), redaction_count, persona.domain,
+    )
 
     return {
         "report": report,
@@ -96,4 +132,6 @@ def generate_report(
         "prompt_system": messages[0]["content"],
         "prompt_user": messages[1]["content"],
         "pii_redacted": redaction_count,
+        "domain": persona.domain,
+        "persona_role": persona.role,
     }
